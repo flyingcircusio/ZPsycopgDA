@@ -20,6 +20,7 @@ import sys
 import time
 import db
 import re
+import os
 
 import Acquisition
 import Shared.DC.ZRDB.Connection
@@ -116,10 +117,16 @@ class Connection(Shared.DC.ZRDB.Connection.Connection):
 
         self._v_connected = ''
         dbf = self.factory()
-        
+
+        # Support reading connection string from envvar ala "ENV:db_clx1"
+        connection_string = s
+        if connection_string.startswith('ENV:'):
+            connection_string = os.environ[connection_string[4:]]
+
         # TODO: let the psycopg exception propagate, or not?
         self._v_database_connection = dbf(
-            self.connection_string, self.tilevel, self.get_type_casts(), self.encoding)
+            connection_string, self.tilevel, self.get_type_casts(),
+            self.encoding)
         self._v_database_connection.open()
         self._v_connected = DateTime()
 
