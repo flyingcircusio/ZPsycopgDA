@@ -44,6 +44,7 @@ class AbstractConnectionPool(object):
         self._used = {}
         self._rused = {} # id(conn) -> key map
         self._keys = 0
+        self._initialized = {}
 
         for i in range(self.minconn):
             self._connect()
@@ -51,6 +52,7 @@ class AbstractConnectionPool(object):
     def _connect(self, key=None):
         """Create a new connection and assign it to 'key' if not None."""
         conn = psycopg2.connect(*self._args, **self._kwargs)
+        self._initialized[id(conn)] = False
         if key is not None:
             self._used[key] = conn
             self._rused[id(conn)] = key
@@ -92,6 +94,8 @@ class AbstractConnectionPool(object):
             self._pool.append(conn)
         else:
             conn.close()
+            if id(conn) in self._initialized:
+                del self._initialized[id(conn)]
 
         # here we check for the presence of key because it can happen that a
         # thread tries to put back a connection after a call to close
@@ -110,6 +114,8 @@ class AbstractConnectionPool(object):
         for conn in self._pool + list(self._used.values()):
             try:
                 conn.close()
+                if id(conn) in self._initialized:
+                    del self._initialized[id(conn)]
             except:
                 pass
         self.closed = True

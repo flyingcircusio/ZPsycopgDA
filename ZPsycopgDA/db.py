@@ -47,20 +47,31 @@ class DB(TM, dbi_db.DB):
         self.calls = 0
         self.make_mappings()
 
-    def getconn(self, init=True):
+    def getconn(self, init=True, retry=100):
         # if init is False we are trying to get hold on an already existing
         # connection, so we avoid to (re)initialize it risking errors.
         conn = pool.getconn(self.dsn)
-        if init:
+        _pool = pool._connections_pool[self.dsn]
+        if not _pool._initialized[id(conn)]:
             # use set_session where available as in these versions
             # set_isolation_level generates an extra query.
             if psycopg2.__version__ >= '2.4.2':
-                conn.set_session(isolation_level=int(self.tilevel))
+                try:
+                    conn.set_session(isolation_level=int(self.tilevel))
+                except psycopg2.InterfaceError:
+                    # we got a closed connection from a poisoned pool.
+                    # close it and retry
+                    pool.putconn(self.dsn, conn, True)
+                    if not retry:
+                        raise ConflictError(
+                            "OperationalError from psycopg2")
+                    return self.getconn(init, retry-1)
             else:
                 conn.set_isolation_level(int(self.tilevel))
             conn.set_client_encoding(self.encoding)
             for tc in self.typecasts:
                 register_type(tc, conn)
+            _pool._initialized[id(conn)] = True
         return conn
 
     def putconn(self, close=False):
@@ -89,6 +100,8 @@ class DB(TM, dbi_db.DB):
             self.putconn()
         except AttributeError:
             pass
+        except psycopg2.OperationalError:
+            self.putconn(True)
 
     def open(self):
         # this will create a new pool for our DSN if not already existing,
@@ -182,7 +195,7 @@ class DB(TM, dbi_db.DB):
                     # Ha, here we have to look like we are the ZODB raising conflict errrors, raising ZPublisher.Publish.Retry just doesn't work
                     #logging.debug("Serialization Error, retrying transaction", exc_info=True)
                     raise ConflictError("TransactionRollbackError from psycopg2")
-                except psycopg2.OperationalError:
+                except psycopg2.OperationalError as e:
                     #logging.exception("Operational error on connection, closing it.")
                     try:
                         # Only close our connection
@@ -190,6 +203,10 @@ class DB(TM, dbi_db.DB):
                     except:
                         #logging.debug("Something went wrong when we tried to close the pool", exc_info=True)
                         pass
+                    errmsg = str(e).replace('\n', ' ')
+                    raise ConflictError(
+                        "OperationalError from psycopg2: " + errmsg
+                    )
                 if c.description is not None:
                     nselects += 1
                     if c.description != desc and nselects > 1:
